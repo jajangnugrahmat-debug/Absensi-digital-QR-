@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Absensi Digital Berbasis QR</title>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<style>
+:root{font-family:Arial,sans-serif;color:#202833;background:#f2f6fa}
+*{box-sizing:border-box}
+body{max-width:960px;margin:24px auto;padding:0 14px}
+header,.panel{background:#fff;padding:18px;border-radius:12px;
+ box-shadow:0 2px 10px #17365d18;margin-bottom:16px}
+h1{color:#17365d;margin:0 0 8px}
+h2{color:#17365d;font-size:20px}
+button{padding:10px 14px;border:0;border-radius:7px;background:#2878b5;
+ color:white;cursor:pointer;margin:4px}
+button:hover{filter:brightness(.94)}
+button.danger{background:#b42318}
+#reader{max-width:460px;margin:14px auto}
+#status{padding:11px;background:#eaf3f8;border-radius:7px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border:1px solid #d6e0e8;padding:8px;text-align:left}
+th{background:#eaf3f8}
+.scroll{overflow-x:auto}
+.note{font-size:13px;color:#5b6573;line-height:1.5}
+.badge{display:inline-block;background:#eaf3f8;color:#17365d;padding:5px 9px;border-radius:20px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <span class="badge">Proyek Pembelajaran</span>
+  <h1>Absensi Digital Berbasis QR</h1>
+  <p>Scan QR Code peserta untuk mencatat kehadiran secara digital.</p>
+  <p class="note">Format QR yang didukung: <b>ID|Nama|Kelas</b><br>
+  Contoh: <code>TEI001|Rendy Putma Ganda|XI TEI 1</code></p>
+</header>
+
+<section class="panel">
+  <h2>Menu Absensi</h2>
+  <button id="start">Mulai Kamera</button>
+  <button id="stop">Hentikan Kamera</button>
+  <button id="export">Ekspor CSV</button>
+  <button id="clear" class="danger">Hapus Data</button>
+  <p id="status" role="status" aria-live="polite">Status: kamera belum dimulai.</p>
+  <div id="reader"></div>
+  <p class="note">Jika kamera tidak terbuka, izinkan akses kamera dan jalankan web melalui HTTPS atau localhost. Pustaka pemindai membutuhkan koneksi internet.</p>
+</section>
+
+<section class="panel">
+  <h2>Data Kehadiran</h2>
+  <p id="count">Jumlah hadir: 0</p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>No.</th><th>ID</th><th>Nama</th><th>Kelas</th><th>Tanggal</th><th>Waktu</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="note">
+  Prototipe ini menyimpan data di browser/perangkat yang digunakan. Data tidak otomatis tersinkron ke perangkat lain.
+</footer>
+
+<script>
+const KEY = "absensi_qr_v1";
+let scanner = null;
+let running = false;
+let lastText = "";
+let lastAt = 0;
+
+function getRecords() {
+  try { return JSON.parse(localStorage.getItem(KEY) || "[]"); }
+  catch (error) { return []; }
+}
+function saveRecords(records) {
+  localStorage.setItem(KEY, JSON.stringify(records));
+}
+function showStatus(message) {
+  document.getElementById("status").textContent = "Status: " + message;
+}
+function render() {
+  const records = getRecords();
+  const body = document.getElementById("rows");
+  body.replaceChildren();
+  records.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    [i + 1, r.id, r.name, r.klass, r.date, r.time].forEach(value => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  document.getElementById("count").textContent = "Jumlah hadir: " + records.length;
+}
+function recordAttendance(decodedText) {
+  const parts = decodedText.trim().split("|").map(x => x.trim());
+  if (parts.length !== 3 || parts.some(x => !x)) {
+    showStatus("Format QR salah. Gunakan ID|Nama|Kelas.");
+    return;
+  }
+  const [id, name, klass] = parts;
+  const now = new Date();
+  const date = now.getFullYear() + "-" +
+    String(now.getMonth() + 1).padStart(2, "0") + "-" +
+    String(now.getDate()).padStart(2, "0");
+  const time = now.toLocaleTimeString("id-ID");
+  const records = getRecords();
+  if (records.some(r => r.id === id && r.date === date)) {
+    showStatus(name + " sudah tercatat hadir hari ini.");
+    return;
+  }
+  records.push({id, name, klass, date, time});
+  saveRecords(records);
+  render();
+  showStatus("Berhasil mencatat " + name + " (" + klass + ") pukul " + time + ".");
+}
+async function startScanner() {
+  if (running) return;
+  if (typeof Html5Qrcode === "undefined") {
+    showStatus("Pustaka pemindai gagal dimuat. Periksa koneksi internet.");
+    return;
+  }
+  scanner = new Html5Qrcode("reader");
+  try {
+    await scanner.start(
+      {facingMode: "environment"},
+      {fps: 10, qrbox: {width: 240, height: 240}},
+      text => {
+        const now = Date.now();
+        if (text === lastText && now - lastAt < 2500) return;
+        lastText = text;
+        lastAt = now;
+        recordAttendance(text);
+      },
+      () => {}
+    );
+    running = true;
+    showStatus("kamera aktif. Arahkan kamera ke QR Code peserta.");
+  } catch (error) {
+    showStatus("Kamera tidak dapat dibuka. Izinkan akses kamera dan gunakan HTTPS/localhost.");
+  }
+}
+async function stopScanner() {
+  if (scanner && running) {
+    try { await scanner.stop(); await scanner.clear(); }
+    catch (error) { /* kamera mungkin sudah berhenti */ }
+  }
+  running = false;
+  scanner = null;
+  showStatus("kamera dihentikan.");
+}
+document.getElementById("start").addEventListener("click", startScanner);
+document.getElementById("stop").addEventListener("click", stopScanner);
+document.getElementById("export").addEventListener("click", () => {
+  const records = getRecords();
+  if (!records.length) {
+    showStatus("Belum ada data untuk diekspor.");
+    return;
+  }
+  const quote = value => '"' + String(value).replace(/"/g, '""') + '"';
+  const lines = [["ID", "Nama", "Kelas", "Tanggal", "Waktu"],
+    ...records.map(r => [r.id, r.name, r.klass, r.date, r.time])];
+  const csv = lines.map(row => row.map(quote).join(",")).join("\r\n");
+  const blob = new Blob(["\ufeff" + csv], {type: "text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "data-absensi.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showStatus("File CSV berhasil dibuat.");
+});
+document.getElementById("clear").addEventListener("click", () => {
+  if (confirm("Yakin ingin menghapus semua data absensi di browser ini?")) {
+    localStorage.removeItem(KEY);
+    render();
+    showStatus("Data lokal dihapus.");
+  }
+});
+render();
+</script>
+</body>
+</html>
